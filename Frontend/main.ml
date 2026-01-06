@@ -21,7 +21,7 @@ let () =
 
   let chatbox = Chatbox.create 50 50 700 500 in
   let username = ref None in
-  let api_url = "https://your-api-endpoint.com/chat" in
+  let api_url = "http://localhost:5000/chat" in
 
   Chatbox.add_message chatbox "System" "Pls enter your username so we can take your requests.";
 

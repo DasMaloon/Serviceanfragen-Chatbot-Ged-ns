@@ -1,3 +1,5 @@
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
 from dataclasses import dataclass
 from datetime import datetime
 import re
@@ -52,7 +54,7 @@ def find_Keywords(text, categories):
         if hits:
             found[category] = hits
 
-    print("gefunden: " + str(found))
+    #print("gefunden: " + str(found))
     return found
 
 
@@ -85,7 +87,7 @@ def create_ticket(ticket_id, name_anfrage, text):
     )
 
 
-ticket_id = 1
+"""ticket_id = 1
 while True:
     name = input("Name/Abteilung: ").strip()
     if name.lower() == "quit":
@@ -102,3 +104,55 @@ while True:
     print()
 
     ticket_id += 1
+"""
+class TicketHandler(BaseHTTPRequestHandler):
+    ticket_id = 1
+    tickets = []
+
+    def _set_headers(self, code=200):
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.end_headers()
+    
+    def do_POST(self):
+        if self.path != "/chat":
+            self._set_headers(404)
+            self.wfile.write(json.dumps({"error": "NOT Found"}).encode())
+            return
+        
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
+        try:
+            data = json.loads(body)
+            username = data.get("username")
+            message = data.get("message")
+        except Exception:
+            self._set_headers(400)
+            self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
+            return
+        
+        if not username or not message:
+            self._set_headers(400)
+            self.wfile.write(json.dumps({"error": "Missing username or message"}).encode)
+            return
+        
+        ticket = create_ticket(TicketHandler.ticket_id, username, message)
+        TicketHandler.tickets.append(ticket)
+        TicketHandler.ticket_id += 1
+
+        response = {
+            "ticket_id": ticket.id,
+            "timestamp": ticket.uhrzeit,
+            "category": ticket.category,
+            "message": f"Ticket erstellt für {ticket.name} ({ticket.category})"
+        }
+
+        self._set_headers(200)
+        self.wfile.write(json.dumps(response).encode())
+
+if __name__ == "__main__":
+    server_address = ("", 5000)
+    httpd = HTTPServer(server_address, TicketHandler)
+    print("Server läuft auf http://localhost:5000/chat")
+    httpd.serve_forever()
