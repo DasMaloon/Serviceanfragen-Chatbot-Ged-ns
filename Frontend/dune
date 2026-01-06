@@ -1,0 +1,4 @@
+(executable
+ (name main)
+ (modules main chatbox)
+ (libraries raylib cohttp-lwt-unix lwt))
