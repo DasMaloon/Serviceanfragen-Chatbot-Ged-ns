@@ -6,8 +6,8 @@ import re
 import urllib.request
 
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama3"
+OLLAMA_URL = "http://100.71.82.99:11434/api/chat"
+OLLAMA_MODEL = "ministral-3:8b"
 
 
 @dataclass
