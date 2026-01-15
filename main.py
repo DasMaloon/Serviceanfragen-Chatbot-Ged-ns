@@ -3,6 +3,12 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 import re
+import urllib.request
+
+
+OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_MODEL = "llama3"
+
 
 @dataclass
 class Ticket:
@@ -12,99 +18,73 @@ class Ticket:
     anfrage: str
     category: str
 
-CATEGORIES = {
-    "Drucker": [
-        "drucker", "print", "druckt nicht", "papierstau", "toner", "patrone", "scanner", "scan", "warteschlange"
-    ],
-    "Netzwerk": [
-        "wlan", "wifi", "lan", "netzwerk", "internet", "vpn", "dns", "ip", "verbindung", "kein netz"
-    ],
-    "Microsoft Software": [
-        "outlook", "teams", "excel", "word", "powerpoint", "onedrive", "sharepoint", "office", "m365", "microsoft"
-    ],
-    "Windows Update": [
-        "update", "windows update", "neu starten", "neustart", "patch", "aktualisierung"
-    ],
-    "Login/Account": [
-        "passwort", "login", "anmelden", "konto", "account", "gesperrt", "2fa", "mfa", "pin"
-    ],
-    "Hardware": [
-        "tastatur", "maus", "monitor", "bildschirm", "akku", "netzteil", "dock", "headset", "mikrofon", "kamera"
-    ],
-    "Sonstiges": []
-}
+CATEGORIES = [
+    "Drucker",
+    "Netzwerk",
+    "Microsoft Software",
+    "Windows Update",
+    "Login/Account",
+    "Hardware",
+    "Sonstiges",
+]
 
 
-def normalize(text) -> str:
+def ask_ollama(message: str):
+    prompt = f"""
+You are an IT helpdesk assistant.
+
+Decide if the user's request is easy to answer.
+
+Easy = common IT questions with a clear solution.
+Hard = requires investigation or human action.
+
+If easy:
+Respond ONLY with JSON:
+{{ "type": "answer", "message": "..." }}
+
+If hard:
+Choose ONE category from:
+{", ".join(CATEGORIES)}
+
+Respond ONLY with JSON:
+{{ "type": "ticket", "category": "..." }}
+
+User message:
+"{message}"
+"""
+
+    payload = json.dumps({
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False
+    }).encode()
+
+    req = urllib.request.Request(
+        OLLAMA_URL,
+        data=payload,
+        headers={"Content-Type": "application/json"}
+    )
+
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        result = json.loads(resp.read())
+
+    return json.loads(result["response"])
+
+
+def normalize(text: str) -> str:
     text = text.lower().strip()
-    text = re.sub(r"\s+", " ", text)
-    return text
+    return re.sub(r"\s+", " ", text)
 
-
-def find_Keywords(text, categories):
-    found = {}
-
-    for category, keywords in categories.items():
-        hits = []
-
-        for keyword in keywords:
-            if keyword in text:
-                hits.append(keyword)
-
-        if hits:
-            found[category] = hits
-
-    #print("gefunden: " + str(found))
-    return found
-
-
-def find_Category(found):
-
-    best_category = ""
-    max_hits = 0
-
-    if found:
-        for category in found:
-            if len(found[category]) > max_hits:
-                max_hits = len(found[category])
-                best_category = category
-
-        return best_category
-
-
-def create_ticket(ticket_id, name_anfrage, text):
-
-    text = normalize(text)
-    found = find_Keywords(text, CATEGORIES)
-    category_found = find_Category(found)
-
+def create_ticket(ticket_id, name, text, category):
     return Ticket(
-        id = ticket_id,
-        uhrzeit = datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        name = name_anfrage,
-        anfrage = text,
-        category = category_found,
+        id=ticket_id,
+        uhrzeit=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        name=name,
+        anfrage=normalize(text),
+        category=category
     )
 
 
-"""ticket_id = 1
-while True:
-    name = input("Name/Abteilung: ").strip()
-    if name.lower() == "quit":
-        break
-
-    anfrage = input("Bitte Beschreiben sie ihr Problem: ").strip()
-    if anfrage.lower() == "quit":
-        break
-
-    ticket = create_ticket(ticket_id, name, anfrage)
-    print()
-    print("Ticket:")
-    print(ticket)
-    print()
-
-    ticket_id += 1
-"""
 class TicketHandler(BaseHTTPRequestHandler):
     ticket_id = 1
     tickets = []
@@ -112,47 +92,67 @@ class TicketHandler(BaseHTTPRequestHandler):
     def _set_headers(self, code=200):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-    
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
     def do_POST(self):
         if self.path != "/chat":
             self._set_headers(404)
-            self.wfile.write(json.dumps({"error": "NOT Found"}).encode())
+            self.wfile.write(json.dumps({"error": "Not found"}).encode())
             return
-        
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length)
-        try:
-            data = json.loads(body)
-            username = data.get("username")
-            message = data.get("message")
-        except Exception:
-            self._set_headers(400)
-            self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
-            return
-        
+
+        length = int(self.headers.get("Content-Length", 0))
+        data = json.loads(self.rfile.read(length))
+
+        username = data.get("username")
+        message = data.get("message")
+
         if not username or not message:
             self._set_headers(400)
-            self.wfile.write(json.dumps({"error": "Missing username or message"}).encode)
+            self.wfile.write(json.dumps({"error": "Missing data"}).encode())
             return
-        
-        ticket = create_ticket(TicketHandler.ticket_id, username, message)
+
+        try:
+            ai = ask_ollama(message)
+        except Exception:
+            ai = {"type": "ticket", "category": "Sonstiges"}
+
+        if ai.get("type") == "answer":
+            self._set_headers(200)
+            self.wfile.write(json.dumps({
+                "type": "answer",
+                "message": ai.get("message", "Sorry, I couldn't answer that.")
+            }).encode())
+            return
+
+        category = ai.get("category", "Sonstiges")
+        ticket = create_ticket(
+            TicketHandler.ticket_id,
+            username,
+            message,
+            category
+        )
+
         TicketHandler.tickets.append(ticket)
         TicketHandler.ticket_id += 1
 
-        response = {
-            "ticket_id": ticket.id,
-            "timestamp": ticket.uhrzeit,
-            "category": ticket.category,
-            "message": f"Ticket erstellt für {ticket.name} ({ticket.category})"
-        }
-
         self._set_headers(200)
-        self.wfile.write(json.dumps(response).encode())
+        self.wfile.write(json.dumps({
+            "type": "ticket",
+            "id": ticket.id,
+            "category": ticket.category,
+            "message": "Ticket created and forwarded to IT support."
+        }).encode())
+
 
 if __name__ == "__main__":
-    server_address = ("", 5000)
-    httpd = HTTPServer(server_address, TicketHandler)
-    print("Server läuft auf http://localhost:5000/chat")
-    httpd.serve_forever()
+    server = HTTPServer(("", 5000), TicketHandler)
+    print("Server running on http://localhost:5000/chat")
+    server.serve_forever()
